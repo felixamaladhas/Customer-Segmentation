@@ -40,13 +40,18 @@ def generate_prediction_output(df: pd.DataFrame) -> pd.DataFrame:
     cleaned = clean_transactions(df)
 
     customer_data = build_customer_features(cleaned)
+
     customer_data_cleaned, outliers = detect_outliers(
         customer_data,
         contamination=0.05,
     )
 
     customer_data_scaled, _, _ = scale_features(customer_data_cleaned)
-    customer_data_pca, _ = apply_pca(customer_data_scaled, n_components=3)
+
+    customer_data_pca, _ = apply_pca(
+        customer_data_scaled,
+        n_components=3,
+    )
 
     best_k, _ = choose_best_k(
         customer_data_pca,
@@ -72,7 +77,10 @@ def generate_prediction_output(df: pd.DataFrame) -> pd.DataFrame:
 
 
 st.title("🛍️ Retail Customer SKU Recommendation System")
-st.caption("Upload the customer transaction dataset and view recommended SKUs by CustomerID.")
+
+st.caption(
+    "Upload the customer transaction dataset and view a random sample of customer-level SKU recommendations."
+)
 
 
 uploaded_file = st.file_uploader(
@@ -82,7 +90,7 @@ uploaded_file = st.file_uploader(
 
 
 if uploaded_file is None:
-    st.info("Upload your dataset to start.")
+    st.info("Upload your dataset to generate customer SKU recommendations.")
     st.stop()
 
 
@@ -110,39 +118,67 @@ available_cols = [col for col in required_cols if col in prediction_df.columns]
 prediction_df = prediction_df[available_cols]
 
 
-with st.sidebar:
-    st.header("Customer Selection")
+total_customers = prediction_df["CustomerID"].nunique()
+total_recommendations = len(prediction_df)
 
-    customer_list = sorted(prediction_df["CustomerID"].dropna().unique())
+sku_cols = [
+    col for col in [
+        "Rec1_StockCode",
+        "Rec2_StockCode",
+        "Rec3_StockCode",
+    ]
+    if col in prediction_df.columns
+]
 
-    selected_customer = st.selectbox(
-        "Select Customer Number",
-        options=customer_list,
-    )
+unique_recommended_skus = pd.unique(
+    prediction_df[sku_cols].values.ravel()
+)
 
-
-st.subheader("Recommended SKUs")
-
-customer_output = prediction_df[
-    prediction_df["CustomerID"] == selected_customer
+unique_recommended_skus = [
+    sku for sku in unique_recommended_skus
+    if pd.notna(sku)
 ]
 
 
-if customer_output.empty:
-    st.warning("No SKU recommendations found for this customer.")
-else:
-    st.success(f"Showing recommended SKUs for CustomerID: {selected_customer}")
+st.subheader("Recommendation Summary")
 
-    st.dataframe(
-        customer_output,
-        use_container_width=True,
-        hide_index=True,
-    )
+kpi1, kpi2, kpi3 = st.columns(3)
+
+kpi1.metric(
+    "Customers Recommended",
+    f"{total_customers:,}",
+)
+
+kpi2.metric(
+    "Recommendation Rows",
+    f"{total_recommendations:,}",
+)
+
+kpi3.metric(
+    "Unique SKUs Recommended",
+    f"{len(unique_recommended_skus):,}",
+)
+
+
+st.subheader("Random 10 Customer SKU Recommendations")
+
+sample_size = min(10, len(prediction_df))
+
+random_10_customers = prediction_df.sample(
+    n=sample_size,
+    random_state=None,
+)
+
+st.dataframe(
+    random_10_customers,
+    use_container_width=True,
+    hide_index=True,
+)
 
 
 st.download_button(
-    "Download Selected Customer Recommendations",
-    data=customer_output.to_csv(index=False).encode("utf-8"),
-    file_name=f"customer_{selected_customer}_recommendations.csv",
+    "Download Full Recommendation Output",
+    data=prediction_df.to_csv(index=False).encode("utf-8"),
+    file_name="customer_sku_recommendations.csv",
     mime="text/csv",
 )
