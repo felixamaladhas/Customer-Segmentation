@@ -176,15 +176,42 @@ with tab2:
     st.dataframe(preview["customer_recommendations"].head(200), use_container_width=True)
 
 with tab3:
-    st.markdown("### Search by Customer ID")
-    customer_id = st.text_input("Enter CustomerID")
-    if customer_id:
-        customer_id = str(customer_id).strip()
-        customer_rows = preview["customer_recommendations"][preview["customer_recommendations"]["CustomerID"] == customer_id]
-        if customer_rows.empty:
-            st.warning("CustomerID not found in the modeled dataset.")
-        else:
-            st.dataframe(customer_rows, use_container_width=True)
+    st.markdown("### Customer SKU Recommendation Lookup")
+
+    rec_df = preview["customer_recommendations"].copy()
+    rec_df["CustomerID"] = rec_df["CustomerID"].astype(str)
+
+    customer_list = sorted(rec_df["CustomerID"].unique())
+
+    selected_customer = st.sidebar.selectbox(
+        "Select Customer Number",
+        options=customer_list
+    )
+
+    customer_rows = rec_df[rec_df["CustomerID"] == selected_customer]
+
+    if customer_rows.empty:
+        st.warning("No recommendations found for this customer.")
+    else:
+        st.success(f"Recommendations for CustomerID: {selected_customer}")
+
+        display_cols = [
+            "CustomerID",
+            "Rec1_StockCode",
+            "Rec1_Description",
+            "Rec2_StockCode",
+            "Rec2_Description",
+            "Rec3_StockCode",
+            "Rec3_Description",
+        ]
+
+        available_cols = [col for col in display_cols if col in customer_rows.columns]
+
+        st.dataframe(
+            customer_rows[available_cols],
+            use_container_width=True,
+            hide_index=True
+        )
 
 with tab4:
     st.markdown("### Download Preview Outputs")
