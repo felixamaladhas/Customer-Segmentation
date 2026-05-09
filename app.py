@@ -36,7 +36,10 @@ def load_uploaded_dataset(file_bytes: bytes, suffix: str) -> pd.DataFrame:
 
 
 @st.cache_data(show_spinner=True)
-def generate_prediction_output(df: pd.DataFrame):
+def generate_prediction_output(
+    df: pd.DataFrame,
+    number_of_skus: int,
+):
     cleaned = clean_transactions(df)
 
     customer_data = build_customer_features(cleaned)
@@ -69,24 +72,35 @@ def generate_prediction_output(df: pd.DataFrame):
         cleaned,
         customer_clusters,
         outliers,
-        top_n_products_per_cluster=10,
-        n_recommendations=3,
+        top_n_products_per_cluster=max(10, number_of_skus),
+        n_recommendations=number_of_skus,
     )
 
     return customer_recommendations, cleaned
 
 
+def get_recommendation_columns(number_of_skus: int):
+    cols = ["CustomerID"]
+
+    for i in range(1, number_of_skus + 1):
+        cols.extend(
+            [
+                f"Rec{i}_StockCode",
+                f"Rec{i}_Description",
+            ]
+        )
+
+    return cols
+
+
 def build_revenue_opportunity_table(
     random_customers_df: pd.DataFrame,
     cleaned_df: pd.DataFrame,
+    number_of_skus: int,
 ) -> pd.DataFrame:
     cleaned_df = cleaned_df.copy()
-
     cleaned_df["StockCode"] = cleaned_df["StockCode"].astype(str)
-
-    cleaned_df = cleaned_df[
-        cleaned_df["Quantity"] > 0
-    ]
+    cleaned_df = cleaned_df[cleaned_df["Quantity"] > 0]
 
     sku_stats = (
         cleaned_df.groupby("StockCode")
@@ -102,57 +116,36 @@ def build_revenue_opportunity_table(
     rows = []
 
     for _, row in random_customers_df.iterrows():
-        rec1_sku = str(row.get("Rec1_StockCode", ""))
-        rec2_sku = str(row.get("Rec2_StockCode", ""))
-        rec3_sku = str(row.get("Rec3_StockCode", ""))
+        output_row = {
+            "CustomerID": row["CustomerID"],
+        }
 
-        rec1_stats = sku_lookup.get(rec1_sku, {})
-        rec2_stats = sku_lookup.get(rec2_sku, {})
-        rec3_stats = sku_lookup.get(rec3_sku, {})
+        total_revenue = 0
 
-        rec1_qty = round(rec1_stats.get("Expected_Qty", 0), 0)
-        rec2_qty = round(rec2_stats.get("Expected_Qty", 0), 0)
-        rec3_qty = round(rec3_stats.get("Expected_Qty", 0), 0)
+        for i in range(1, number_of_skus + 1):
+            sku_col = f"Rec{i}_StockCode"
+            desc_col = f"Rec{i}_Description"
 
-        rec1_price = round(rec1_stats.get("Avg_UnitPrice", 0), 2)
-        rec2_price = round(rec2_stats.get("Avg_UnitPrice", 0), 2)
-        rec3_price = round(rec3_stats.get("Avg_UnitPrice", 0), 2)
+            sku = str(row.get(sku_col, ""))
+            desc = row.get(desc_col, "")
 
-        rec1_revenue = rec1_qty * rec1_price
-        rec2_revenue = rec2_qty * rec2_price
-        rec3_revenue = rec3_qty * rec3_price
+            sku_data = sku_lookup.get(sku, {})
 
-        total_revenue = (
-            rec1_revenue
-            + rec2_revenue
-            + rec3_revenue
-        )
+            expected_qty = round(sku_data.get("Expected_Qty", 0), 0)
+            avg_unit_price = round(sku_data.get("Avg_UnitPrice", 0), 2)
+            revenue = round(expected_qty * avg_unit_price, 2)
 
-        rows.append(
-            {
-                "CustomerID": row["CustomerID"],
+            total_revenue += revenue
 
-                "Rec1_SKU": rec1_sku,
-                "Rec1_Description": row.get("Rec1_Description", ""),
-                "Rec1_Expected_Qty": rec1_qty,
-                "Rec1_UnitPrice": rec1_price,
-                "Rec1_Revenue": round(rec1_revenue, 2),
+            output_row[f"Rec{i}_SKU"] = sku
+            output_row[f"Rec{i}_Description"] = desc
+            output_row[f"Rec{i}_Expected_Qty"] = expected_qty
+            output_row[f"Rec{i}_UnitPrice"] = avg_unit_price
+            output_row[f"Rec{i}_Revenue"] = revenue
 
-                "Rec2_SKU": rec2_sku,
-                "Rec2_Description": row.get("Rec2_Description", ""),
-                "Rec2_Expected_Qty": rec2_qty,
-                "Rec2_UnitPrice": rec2_price,
-                "Rec2_Revenue": round(rec2_revenue, 2),
+        output_row["Total_Expected_Revenue"] = round(total_revenue, 2)
 
-                "Rec3_SKU": rec3_sku,
-                "Rec3_Description": row.get("Rec3_Description", ""),
-                "Rec3_Expected_Qty": rec3_qty,
-                "Rec3_UnitPrice": rec3_price,
-                "Rec3_Revenue": round(rec3_revenue, 2),
-
-                "Total_Expected_Revenue": round(total_revenue, 2),
-            }
-        )
+        rows.append(output_row)
 
     revenue_df = pd.DataFrame(rows)
 
@@ -169,6 +162,26 @@ st.title("🛍️ Retail Customer SKU Recommendation System")
 st.caption(
     "Upload the customer transaction dataset and generate customer-level SKU recommendations with expected revenue opportunity."
 )
+
+
+with st.sidebar:
+    st.header("Output Controls")
+
+    number_of_customers = st.slider(
+        "Number of Customers to Display",
+        min_value=10,
+        max_value=100,
+        value=10,
+        step=10,
+    )
+
+    number_of_skus = st.slider(
+        "Number of SKU Recommendations",
+        min_value=3,
+        max_value=50,
+        value=3,
+        step=1,
+    )
 
 
 uploaded_file = st.file_uploader(
@@ -191,20 +204,15 @@ raw_df = load_uploaded_dataset(
 
 
 with st.spinner("Generating recommendations..."):
-    prediction_df, cleaned_df = generate_prediction_output(raw_df)
+    prediction_df, cleaned_df = generate_prediction_output(
+        raw_df,
+        number_of_skus,
+    )
 
 
 prediction_df["CustomerID"] = prediction_df["CustomerID"].astype(str)
 
-required_cols = [
-    "CustomerID",
-    "Rec1_StockCode",
-    "Rec1_Description",
-    "Rec2_StockCode",
-    "Rec2_Description",
-    "Rec3_StockCode",
-    "Rec3_Description",
-]
+required_cols = get_recommendation_columns(number_of_skus)
 
 available_cols = [
     col for col in required_cols
@@ -214,15 +222,17 @@ available_cols = [
 prediction_df = prediction_df[available_cols]
 
 
-st.subheader("Random 10 Customer Recommendations")
+st.subheader(f"Random {number_of_customers} Customer Recommendations")
 
-random_10_customers = prediction_df.sample(
-    n=min(10, len(prediction_df)),
+sample_size = min(number_of_customers, len(prediction_df))
+
+random_customers = prediction_df.sample(
+    n=sample_size,
     random_state=None,
 )
 
 st.dataframe(
-    random_10_customers,
+    random_customers,
     use_container_width=True,
     hide_index=True,
 )
@@ -235,8 +245,9 @@ st.caption(
 )
 
 revenue_table = build_revenue_opportunity_table(
-    random_10_customers,
+    random_customers,
     cleaned_df,
+    number_of_skus,
 )
 
 st.dataframe(
@@ -249,7 +260,7 @@ st.dataframe(
 total_revenue_opportunity = revenue_table["Total_Expected_Revenue"].sum()
 
 st.info(
-    f"Total expected revenue from the displayed 10 customers: "
+    f"Total expected revenue from the displayed {sample_size} customers: "
     f"£{total_revenue_opportunity:,.2f}"
 )
 
