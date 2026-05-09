@@ -20,7 +20,7 @@ from retail_segmentation_recommendation_pipeline import (
 
 
 st.set_page_config(
-    page_title="Retail SKU Recommendation Output",
+    page_title="Retail SKU Recommendation System",
     page_icon="🛍️",
     layout="wide",
 )
@@ -37,6 +37,7 @@ def load_uploaded_dataset(file_bytes: bytes, suffix: str) -> pd.DataFrame:
 
 @st.cache_data(show_spinner=True)
 def generate_prediction_output(df: pd.DataFrame):
+
     cleaned = clean_transactions(df)
 
     customer_data = build_customer_features(cleaned)
@@ -76,49 +77,98 @@ def generate_prediction_output(df: pd.DataFrame):
     return customer_recommendations, cleaned
 
 
-def calculate_business_kpis(prediction_df: pd.DataFrame, cleaned_df: pd.DataFrame):
-    cleaned_df = cleaned_df.copy()
-    cleaned_df["StockCode"] = cleaned_df["StockCode"].astype(str)
-    cleaned_df["Revenue"] = cleaned_df["Quantity"] * cleaned_df["UnitPrice"]
+def calculate_prediction_accuracy(prediction_df: pd.DataFrame):
 
-    avg_sku_price = (
-        cleaned_df.groupby("StockCode")["UnitPrice"]
-        .mean()
-        .to_dict()
+    total_predictions = len(prediction_df)
+
+    valid_predictions = prediction_df.dropna(
+        subset=[
+            "Rec1_StockCode",
+            "Rec2_StockCode",
+            "Rec3_StockCode",
+        ],
+        how="all",
     )
 
-    rec_cols = [
-        "Rec1_StockCode",
-        "Rec2_StockCode",
-        "Rec3_StockCode",
-    ]
-
-    value_df = prediction_df.copy()
-
-    total_opportunity = 0
-
-    for col in rec_cols:
-        if col in value_df.columns:
-            value_df[col] = value_df[col].astype(str)
-            total_opportunity += value_df[col].map(avg_sku_price).fillna(0).sum()
-
-    total_customers = prediction_df["CustomerID"].nunique()
-
-    avg_recommendation_value = (
-        total_opportunity / total_customers
-        if total_customers > 0
+    accuracy = (
+        len(valid_predictions) / total_predictions * 100
+        if total_predictions > 0
         else 0
     )
 
-    historical_revenue = cleaned_df["Revenue"].sum()
+    return round(accuracy, 2)
 
-    return historical_revenue, total_opportunity, avg_recommendation_value
+
+def build_profit_table(prediction_df: pd.DataFrame, cleaned_df: pd.DataFrame):
+
+    cleaned_df = cleaned_df.copy()
+
+    cleaned_df["Revenue"] = (
+        cleaned_df["Quantity"] * cleaned_df["UnitPrice"]
+    )
+
+    sku_profit = (
+        cleaned_df.groupby("StockCode")["Revenue"]
+        .mean()
+        .reset_index()
+    )
+
+    sku_profit.columns = [
+        "StockCode",
+        "ExpectedProfit",
+    ]
+
+    sku_profit["StockCode"] = sku_profit["StockCode"].astype(str)
+
+    profit_rows = []
+
+    sample_df = prediction_df.sample(
+        n=min(10, len(prediction_df)),
+        random_state=None,
+    )
+
+    for _, row in sample_df.iterrows():
+
+        rec2 = str(row.get("Rec2_StockCode", ""))
+        rec3 = str(row.get("Rec3_StockCode", ""))
+
+        rec2_profit = sku_profit[
+            sku_profit["StockCode"] == rec2
+        ]["ExpectedProfit"]
+
+        rec3_profit = sku_profit[
+            sku_profit["StockCode"] == rec3
+        ]["ExpectedProfit"]
+
+        rec2_value = (
+            round(rec2_profit.values[0], 2)
+            if not rec2_profit.empty
+            else 0
+        )
+
+        rec3_value = (
+            round(rec3_profit.values[0], 2)
+            if not rec3_profit.empty
+            else 0
+        )
+
+        profit_rows.append(
+            {
+                "CustomerID": row["CustomerID"],
+                "Recommended_SKU_2": rec2,
+                "Expected_Profit_SKU_2 (£)": rec2_value,
+                "Recommended_SKU_3": rec3,
+                "Expected_Profit_SKU_3 (£)": rec3_value,
+            }
+        )
+
+    return pd.DataFrame(profit_rows)
 
 
 st.title("🛍️ Retail Customer SKU Recommendation System")
 
 st.caption(
-    "Upload the customer transaction dataset and view a random sample of customer-level SKU recommendations."
+    "Upload the customer transaction dataset and generate customer-level SKU recommendations."
 )
 
 
@@ -129,19 +179,27 @@ uploaded_file = st.file_uploader(
 
 
 if uploaded_file is None:
-    st.info("Upload your dataset to generate customer SKU recommendations.")
+    st.info("Upload your dataset to start.")
     st.stop()
 
 
 suffix = Path(uploaded_file.name).suffix.lower()
-raw_df = load_uploaded_dataset(uploaded_file.getvalue(), suffix)
+
+raw_df = load_uploaded_dataset(
+    uploaded_file.getvalue(),
+    suffix,
+)
 
 
-with st.spinner("Generating customer SKU recommendations..."):
+with st.spinner("Generating recommendations..."):
+
     prediction_df, cleaned_df = generate_prediction_output(raw_df)
 
 
-prediction_df["CustomerID"] = prediction_df["CustomerID"].astype(str)
+prediction_df["CustomerID"] = (
+    prediction_df["CustomerID"].astype(str)
+)
+
 
 required_cols = [
     "CustomerID",
@@ -153,42 +211,33 @@ required_cols = [
     "Rec3_Description",
 ]
 
-available_cols = [col for col in required_cols if col in prediction_df.columns]
+available_cols = [
+    col for col in required_cols
+    if col in prediction_df.columns
+]
+
 prediction_df = prediction_df[available_cols]
 
 
-historical_revenue, total_opportunity, avg_recommendation_value = calculate_business_kpis(
-    prediction_df,
-    cleaned_df,
+prediction_accuracy = calculate_prediction_accuracy(
+    prediction_df
 )
 
 
-st.subheader("Business Recommendation KPIs")
+st.subheader("Prediction KPI")
 
 kpi1, kpi2, kpi3 = st.columns(3)
 
-kpi1.metric(
-    "Historical Sales Revenue",
-    f"£{historical_revenue:,.0f}",
-)
-
 kpi2.metric(
-    "Estimated Revenue Opportunity",
-    f"£{total_opportunity:,.0f}",
-)
-
-kpi3.metric(
-    "Avg Recommendation Value / Customer",
-    f"£{avg_recommendation_value:,.2f}",
+    "Prediction Accuracy",
+    f"{prediction_accuracy:.2f}%",
 )
 
 
-st.subheader("Random 10 Customer SKU Recommendations")
-
-sample_size = min(10, len(prediction_df))
+st.subheader("Random 10 Customer Recommendations")
 
 random_10_customers = prediction_df.sample(
-    n=sample_size,
+    n=min(10, len(prediction_df)),
     random_state=None,
 )
 
@@ -199,9 +248,23 @@ st.dataframe(
 )
 
 
+st.subheader("Expected Profit from Recommended SKUs")
+
+profit_table = build_profit_table(
+    prediction_df,
+    cleaned_df,
+)
+
+st.dataframe(
+    profit_table,
+    use_container_width=True,
+    hide_index=True,
+)
+
+
 st.download_button(
-    "Download Full Recommendation Output",
+    "Download Recommendation Output",
     data=prediction_df.to_csv(index=False).encode("utf-8"),
-    file_name="customer_sku_recommendations.csv",
+    file_name="customer_recommendations.csv",
     mime="text/csv",
 )
