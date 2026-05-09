@@ -20,7 +20,7 @@ from retail_segmentation_recommendation_pipeline import (
 
 
 st.set_page_config(
-    page_title="Customer SKU Recommendations",
+    page_title="Retail SKU Recommendation Output",
     page_icon="🛍️",
     layout="wide",
 )
@@ -36,7 +36,7 @@ def load_uploaded_dataset(file_bytes: bytes, suffix: str) -> pd.DataFrame:
 
 
 @st.cache_data(show_spinner=True)
-def generate_prediction_output(df: pd.DataFrame) -> pd.DataFrame:
+def generate_prediction_output(df: pd.DataFrame):
     cleaned = clean_transactions(df)
 
     customer_data = build_customer_features(cleaned)
@@ -73,7 +73,46 @@ def generate_prediction_output(df: pd.DataFrame) -> pd.DataFrame:
         n_recommendations=3,
     )
 
-    return customer_recommendations
+    return customer_recommendations, cleaned
+
+
+def calculate_business_kpis(prediction_df: pd.DataFrame, cleaned_df: pd.DataFrame):
+    cleaned_df = cleaned_df.copy()
+    cleaned_df["StockCode"] = cleaned_df["StockCode"].astype(str)
+    cleaned_df["Revenue"] = cleaned_df["Quantity"] * cleaned_df["UnitPrice"]
+
+    avg_sku_price = (
+        cleaned_df.groupby("StockCode")["UnitPrice"]
+        .mean()
+        .to_dict()
+    )
+
+    rec_cols = [
+        "Rec1_StockCode",
+        "Rec2_StockCode",
+        "Rec3_StockCode",
+    ]
+
+    value_df = prediction_df.copy()
+
+    total_opportunity = 0
+
+    for col in rec_cols:
+        if col in value_df.columns:
+            value_df[col] = value_df[col].astype(str)
+            total_opportunity += value_df[col].map(avg_sku_price).fillna(0).sum()
+
+    total_customers = prediction_df["CustomerID"].nunique()
+
+    avg_recommendation_value = (
+        total_opportunity / total_customers
+        if total_customers > 0
+        else 0
+    )
+
+    historical_revenue = cleaned_df["Revenue"].sum()
+
+    return historical_revenue, total_opportunity, avg_recommendation_value
 
 
 st.title("🛍️ Retail Customer SKU Recommendation System")
@@ -99,7 +138,7 @@ raw_df = load_uploaded_dataset(uploaded_file.getvalue(), suffix)
 
 
 with st.spinner("Generating customer SKU recommendations..."):
-    prediction_df = generate_prediction_output(raw_df)
+    prediction_df, cleaned_df = generate_prediction_output(raw_df)
 
 
 prediction_df["CustomerID"] = prediction_df["CustomerID"].astype(str)
@@ -118,45 +157,29 @@ available_cols = [col for col in required_cols if col in prediction_df.columns]
 prediction_df = prediction_df[available_cols]
 
 
-total_customers = prediction_df["CustomerID"].nunique()
-total_recommendations = len(prediction_df)
-
-sku_cols = [
-    col for col in [
-        "Rec1_StockCode",
-        "Rec2_StockCode",
-        "Rec3_StockCode",
-    ]
-    if col in prediction_df.columns
-]
-
-unique_recommended_skus = pd.unique(
-    prediction_df[sku_cols].values.ravel()
+historical_revenue, total_opportunity, avg_recommendation_value = calculate_business_kpis(
+    prediction_df,
+    cleaned_df,
 )
 
-unique_recommended_skus = [
-    sku for sku in unique_recommended_skus
-    if pd.notna(sku)
-]
 
-
-st.subheader("Recommendation Summary")
+st.subheader("Business Recommendation KPIs")
 
 kpi1, kpi2, kpi3 = st.columns(3)
 
 kpi1.metric(
-    "Customers Recommended",
-    f"{total_customers:,}",
+    "Historical Sales Revenue",
+    f"£{historical_revenue:,.0f}",
 )
 
 kpi2.metric(
-    "Recommendation Rows",
-    f"{total_recommendations:,}",
+    "Estimated Revenue Opportunity",
+    f"£{total_opportunity:,.0f}",
 )
 
 kpi3.metric(
-    "Unique SKUs Recommended",
-    f"{len(unique_recommended_skus):,}",
+    "Avg Recommendation Value / Customer",
+    f"£{avg_recommendation_value:,.2f}",
 )
 
 
