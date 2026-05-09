@@ -24,7 +24,28 @@ st.set_page_config(
     page_icon="🛍️",
     layout="wide",
 )
+st.title("🛍️ Retail Customer SKU Recommendation System")
 
+st.markdown(
+    """
+    ### About the Solution
+
+    This AI-powered Retail Customer Recommendation System analyzes historical customer transaction patterns and automatically identifies potential products that customers are likely to purchase next.
+
+    Using Machine Learning-based customer segmentation and recommendation techniques, the solution helps businesses:
+
+    - Improve cross-selling and upselling opportunities
+    - Increase customer engagement and repeat purchases
+    - Predict potential revenue opportunities from recommended products
+    - Identify high-value product combinations based on purchasing behaviour
+
+    The application dynamically generates SKU recommendations and estimated revenue opportunities directly from the uploaded dataset.
+    """
+)
+
+st.caption(
+    "Upload the customer transaction dataset and generate customer-level SKU recommendations with expected revenue opportunity."
+)
 
 @st.cache_data(show_spinner=False)
 def load_uploaded_dataset(file_bytes: bytes, suffix: str) -> pd.DataFrame:
