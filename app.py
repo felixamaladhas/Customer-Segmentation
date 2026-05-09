@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import pickle
 import tempfile
 from pathlib import Path
 
@@ -35,6 +34,7 @@ def load_uploaded_dataset(file_bytes: bytes, suffix: str) -> pd.DataFrame:
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
         tmp.write(file_bytes)
         temp_path = tmp.name
+
     return load_data(temp_path)
 
 
@@ -43,12 +43,22 @@ def prepare_quick_preview(df: pd.DataFrame):
     cleaned = clean_transactions(df)
     customer_data = build_customer_features(cleaned)
     customer_data_cleaned, outliers = detect_outliers(customer_data, contamination=0.05)
+
     customer_data_scaled, _, _ = scale_features(customer_data_cleaned)
     customer_data_pca, _ = apply_pca(customer_data_scaled, n_components=3)
-    best_k, silhouette_scores = choose_best_k(customer_data_pca, start_k=3, stop_k=8)
-    customer_clusters, pca_clusters, _ = cluster_customers(
-        customer_data_cleaned, customer_data_pca, n_clusters=best_k
+
+    best_k, silhouette_scores = choose_best_k(
+        customer_data_pca,
+        start_k=3,
+        stop_k=8,
     )
+
+    customer_clusters, pca_clusters, _ = cluster_customers(
+        customer_data_cleaned,
+        customer_data_pca,
+        n_clusters=best_k,
+    )
+
     customer_recommendations, top_products_per_cluster, recommendation_dict = generate_recommendations(
         cleaned,
         customer_clusters,
@@ -56,6 +66,7 @@ def prepare_quick_preview(df: pd.DataFrame):
         top_n_products_per_cluster=10,
         n_recommendations=3,
     )
+
     return {
         "cleaned": cleaned,
         "customer_data": customer_data,
@@ -75,88 +86,160 @@ def prepare_quick_preview(df: pd.DataFrame):
 def plot_cluster_distribution(customer_clusters: pd.DataFrame):
     fig, ax = plt.subplots(figsize=(8, 4))
     cluster_counts = customer_clusters["cluster"].value_counts().sort_index()
+
     ax.bar(cluster_counts.index.astype(str), cluster_counts.values)
     ax.set_title("Customer Count by Cluster")
     ax.set_xlabel("Cluster")
     ax.set_ylabel("Customers")
-    st.pyplot(fig)
 
+    st.pyplot(fig)
 
 
 def plot_pca_scatter(pca_clusters: pd.DataFrame):
     fig, ax = plt.subplots(figsize=(8, 5))
+
     scatter = ax.scatter(
         pca_clusters["PC1"],
         pca_clusters["PC2"],
         c=pca_clusters["cluster"],
     )
+
     ax.set_title("Customer Segments in PCA Space")
     ax.set_xlabel("PC1")
     ax.set_ylabel("PC2")
+
     legend = ax.legend(*scatter.legend_elements(), title="Cluster")
     ax.add_artist(legend)
-    st.pyplot(fig)
 
+    st.pyplot(fig)
 
 
 def plot_silhouette_scores(scores: dict[int, float]):
     fig, ax = plt.subplots(figsize=(8, 4))
+
     ks = list(scores.keys())
     vals = list(scores.values())
+
     ax.plot(ks, vals, marker="o")
     ax.set_title("Silhouette Score by k")
     ax.set_xlabel("k")
     ax.set_ylabel("Silhouette Score")
     ax.grid(True, alpha=0.3)
+
     st.pyplot(fig)
 
 
 st.title("🛍️ Retail Customer Segmentation & Recommendation System")
-st.caption("Upload your Online Retail dataset, generate customer segments, and explore product recommendations.")
+st.caption(
+    "Upload your Online Retail dataset, generate customer segments, "
+    "and explore product recommendations."
+)
+
 
 with st.sidebar:
     st.header("Configuration")
-    pca_components = st.slider("PCA components", min_value=2, max_value=6, value=3)
-    force_k = st.selectbox("Cluster selection", options=["Auto", 3, 4, 5, 6, 7, 8], index=0)
-    top_n_products = st.slider("Top products per cluster", min_value=5, max_value=20, value=10)
-    n_recommendations = st.slider("Recommendations per customer", min_value=1, max_value=5, value=3)
+
+    pca_components = st.slider(
+        "PCA components",
+        min_value=2,
+        max_value=6,
+        value=3,
+    )
+
+    force_k = st.selectbox(
+        "Cluster selection",
+        options=["Auto", 3, 4, 5, 6, 7, 8],
+        index=0,
+    )
+
+    top_n_products = st.slider(
+        "Top products per cluster",
+        min_value=5,
+        max_value=20,
+        value=10,
+    )
+
+    n_recommendations = st.slider(
+        "Recommendations per customer",
+        min_value=1,
+        max_value=5,
+        value=3,
+    )
+
 
 uploaded_file = st.file_uploader(
     "Upload Online Retail dataset (.xlsx, .xls, .csv)",
     type=["xlsx", "xls", "csv"],
 )
 
+
 if uploaded_file is None:
-    st.info("Upload your dataset to start.")
+    st.info("Upload your dataset to start. Customer selection will appear after processing.")
     st.stop()
+
 
 suffix = Path(uploaded_file.name).suffix.lower()
 raw_df = load_uploaded_dataset(uploaded_file.getvalue(), suffix)
 
+
 st.subheader("Dataset Preview")
+
 col1, col2, col3 = st.columns(3)
+
 col1.metric("Rows", f"{len(raw_df):,}")
 col2.metric("Columns", len(raw_df.columns))
-col3.metric("Unique customers", f"{raw_df['CustomerID'].nunique() if 'CustomerID' in raw_df.columns else 0:,}")
+
+if "CustomerID" in raw_df.columns:
+    col3.metric("Unique customers", f"{raw_df['CustomerID'].nunique():,}")
+else:
+    col3.metric("Unique customers", "0")
+
 st.dataframe(raw_df.head(20), use_container_width=True)
 
-preview = prepare_quick_preview(raw_df)
+
+with st.spinner("Processing customer segmentation and recommendations..."):
+    preview = prepare_quick_preview(raw_df)
+
+
+rec_df = preview["customer_recommendations"].copy()
+
+if "CustomerID" in rec_df.columns:
+    rec_df["CustomerID"] = rec_df["CustomerID"].astype(str)
+
+    customer_list = sorted(rec_df["CustomerID"].dropna().unique())
+
+    with st.sidebar:
+        st.markdown("---")
+        st.header("Customer Lookup")
+
+        selected_customer = st.selectbox(
+            "Select Customer Number",
+            options=customer_list,
+        )
+else:
+    selected_customer = None
+
 
 st.subheader("Project Summary")
+
 met1, met2, met3, met4 = st.columns(4)
+
 met1.metric("Cleaned transactions", f"{len(preview['cleaned']):,}")
 met2.metric("Customers modeled", f"{len(preview['customer_data_cleaned']):,}")
 met3.metric("Outlier customers", f"{len(preview['outliers']):,}")
 met4.metric("Suggested best k", preview["best_k"])
 
 
-tab1, tab2, tab3, tab4, tab5 = st.tabs([
-    "Cluster Insights",
-    "Recommendations",
-    "Customer Lookup",
-    "Downloads",
-    "Run Full Pipeline",
-])
+tab1, tab2, tab3, tab4, tab5 = st.tabs(
+    [
+        "Cluster Insights",
+        "Recommendations",
+        "Customer Lookup",
+        "Downloads",
+        "Run Full Pipeline",
+    ]
+)
+
 
 with tab1:
     st.markdown("### Cluster Distribution")
@@ -169,70 +252,81 @@ with tab1:
     plot_silhouette_scores(preview["silhouette_scores"])
 
     st.markdown("### Top Products per Cluster")
-    st.dataframe(preview["top_products_per_cluster"], use_container_width=True)
-
-with tab2:
-    st.markdown("### Customer Recommendations")
-    st.dataframe(preview["customer_recommendations"].head(200), use_container_width=True)
-
-with tab3:
-    st.markdown("### Customer SKU Recommendation Lookup")
-
-    rec_df = preview["customer_recommendations"].copy()
-    rec_df["CustomerID"] = rec_df["CustomerID"].astype(str)
-
-    customer_list = sorted(rec_df["CustomerID"].unique())
-
-    selected_customer = st.sidebar.selectbox(
-        "Select Customer Number",
-        options=customer_list
+    st.dataframe(
+        preview["top_products_per_cluster"],
+        use_container_width=True,
+        hide_index=True,
     )
 
-    customer_rows = rec_df[rec_df["CustomerID"] == selected_customer]
 
-    if customer_rows.empty:
-        st.warning("No recommendations found for this customer.")
+with tab2:
+    st.markdown("### All Customer Recommendations")
+    st.dataframe(
+        rec_df.head(200),
+        use_container_width=True,
+        hide_index=True,
+    )
+
+
+with tab3:
+    st.markdown("### Customer SKU Recommendations")
+
+    if selected_customer is None:
+        st.warning("CustomerID column was not found in the recommendation output.")
     else:
-        st.success(f"Recommendations for CustomerID: {selected_customer}")
+        customer_rows = rec_df[rec_df["CustomerID"] == selected_customer]
 
-        display_cols = [
-            "CustomerID",
-            "Rec1_StockCode",
-            "Rec1_Description",
-            "Rec2_StockCode",
-            "Rec2_Description",
-            "Rec3_StockCode",
-            "Rec3_Description",
-        ]
+        if customer_rows.empty:
+            st.warning("No recommendations found for this customer.")
+        else:
+            st.success(f"Showing SKU recommendations for CustomerID: {selected_customer}")
 
-        available_cols = [col for col in display_cols if col in customer_rows.columns]
+            display_cols = [
+                "CustomerID",
+                "Rec1_StockCode",
+                "Rec1_Description",
+                "Rec2_StockCode",
+                "Rec2_Description",
+                "Rec3_StockCode",
+                "Rec3_Description",
+            ]
 
-        st.dataframe(
-            customer_rows[available_cols],
-            use_container_width=True,
-            hide_index=True
-        )
+            available_cols = [
+                col for col in display_cols
+                if col in customer_rows.columns
+            ]
+
+            st.dataframe(
+                customer_rows[available_cols],
+                use_container_width=True,
+                hide_index=True,
+            )
+
 
 with tab4:
     st.markdown("### Download Preview Outputs")
+
     st.download_button(
         "Download customer recommendations CSV",
-        data=preview["customer_recommendations"].to_csv(index=False).encode("utf-8"),
+        data=rec_df.to_csv(index=False).encode("utf-8"),
         file_name="customer_recommendations.csv",
         mime="text/csv",
     )
+
     st.download_button(
         "Download top products per cluster CSV",
         data=preview["top_products_per_cluster"].to_csv(index=False).encode("utf-8"),
         file_name="top_products_per_cluster.csv",
         mime="text/csv",
     )
+
     st.download_button(
         "Download silhouette scores JSON",
         data=json.dumps(preview["silhouette_scores"], indent=2).encode("utf-8"),
         file_name="silhouette_scores.json",
         mime="application/json",
     )
+
 
 with tab5:
     st.markdown("### Run Full Training Pipeline and Save Artifacts")
@@ -243,6 +337,7 @@ with tab5:
             with tempfile.TemporaryDirectory() as temp_dir:
                 input_path = Path(temp_dir) / f"input{suffix}"
                 input_path.write_bytes(uploaded_file.getvalue())
+
                 output_dir = Path(temp_dir) / "outputs"
 
                 clusters, pca_clusters, recommendations, artifacts = run_pipeline(
@@ -254,15 +349,14 @@ with tab5:
                     force_k=None if force_k == "Auto" else int(force_k),
                 )
 
-                metadata = {
-                    "best_k": artifacts.best_k,
-                    "silhouette_scores": artifacts.silhouette_scores,
-                    "feature_columns": artifacts.feature_columns,
-                }
-
                 st.success("Pipeline completed successfully.")
-                st.write(f"Selected/used k: {artifacts.best_k}")
-                st.dataframe(recommendations.head(100), use_container_width=True)
+                st.write(f"Selected / used k: {artifacts.best_k}")
+
+                st.dataframe(
+                    recommendations.head(100),
+                    use_container_width=True,
+                    hide_index=True,
+                )
 
                 for file_name in [
                     "customer_clusters.csv",
@@ -278,12 +372,15 @@ with tab5:
                     "cluster_recommendations.pkl",
                 ]:
                     path = output_dir / file_name
+
                     if path.exists():
-                        mime = "application/octet-stream"
                         if file_name.endswith(".csv"):
                             mime = "text/csv"
                         elif file_name.endswith(".json"):
                             mime = "application/json"
+                        else:
+                            mime = "application/octet-stream"
+
                         st.download_button(
                             f"Download {file_name}",
                             data=path.read_bytes(),
